@@ -1,0 +1,163 @@
+#!/bin/bash
+numberOfArguments="$#"
+rowsOrColumns=$1
+
+# The only argument received was the row or column command.
+# something is being piped in
+# fileHoldingInput is temporary, named after its process id,
+# and will be deleted at the end
+if [ $numberOfArguments = "1" ]
+then
+	# $$  returns the process id
+	fileHoldingInput="./fileHoldingInput$$"
+	cat > "$fileHoldingInput"
+
+# two arguments given, there is a file and a row/column wish
+# copy the file provided into a temporary file
+elif [ $numberOfArguments = "2" ]
+then
+	# -s $2 means that the file does exist and is not empty
+	if [ -s $2 ]
+	then
+		if [ -r $2 ] # the file is also readable
+		then
+			fileHoldingInput="./fileHoldingInput$$"
+			cp $2 $fileHoldingInput
+		else
+			echo "ERROR: File not readable." 1>&2
+			exit 1
+		fi
+	else
+		echo "ERROR: File is empty." 1>&2
+		exit 1
+	fi
+# Error condition: send message going to standard out
+# instead to standard error, this is what brewster has in his output
+else
+	echo "Usage: stats {-row|-cols} [file]" 1>&2
+	exit 1
+
+fi
+
+# using the trap command to catch interrupt, hangup, terminate signals
+trap "rm -f $fileHoldingInput; echo 'Trapped a signal... Exiting.'; exit 1" INT HUP TERM
+
+if [ -s $fileHoldingInput ] # file exists, is > 0
+then
+
+	# the user wants me to calculate row statistics, they can put
+	# in any word beginning with a - and a lowercase r and it will work	
+	if [[ $rowsOrColumns == -r* ]] # * is a wild card, the remaining letters don't matter
+	# Uses C method of array handling
+	then
+		printf "Average\tMedian\n"
+
+		while read line # grabs entire row from fileHoldingInput
+		do
+			sum=0
+			counter=0
+			
+			for value in $line # for loop cycles thru each value within the grabbed row in $line
+			do
+				sum=$(expr $sum + $value)
+				arr[counter]=$value
+				((counter++))
+				
+			done
+
+			medianHelperArr=( $( printf "%s\n" "${arr[@]}" | sort -n) ) # iterate thru arr, sort the numbers, put them into medianHelperArr
+
+			# medianIndex is where in the array the median is
+			medianIndex=$(expr $counter / 2)
+
+			med=${medianHelperArr[$medianIndex]}
+
+			# FOR ROUNDING, ADD DENOMINATOR/2 TO THE NUMERATOR
+			denomDiv=$(expr $counter / 2) # denominator/2 part
+			roundingSum=$(expr $sum + $denomDiv) # add denom/2 to the numerator
+
+			avg=$(expr $roundingSum / $counter) # avg = sum / # of vals
+			
+			printf "$avg\t$med\n"
+			
+		done < "$fileHoldingInput"
+
+	rm -f $fileHoldingInput
+
+# user wants to calculate column statistics, any word beginning
+# with -c, * is wildcard
+	elif [[ $rowsOrColumns == -c* ]]
+	# uses more proper Bash method of piping and commands
+	then
+		rowHolder="./rowHolder$$" # I will be transposing the rows and columns
+		cutField=1 # this will be used with the cut command to chop each value seen into a family of vaues consisting of the column it belongs to
+
+		while read line
+		do
+			for val in $line
+			do
+				# Use this command to transpose: cut -f will cut the data into columns 
+				# based on the cutField paramater, sort -n will sort the resulting column
+				# numerically, tr converts each newline into a tab character, and then we
+				# place it into a file for usage
+				cut -f $cutField $fileHoldingInput | sort -n | tr '\n' '\t' >> $rowHolder
+				echo "" >> $rowHolder
+				((cutField++))
+			done
+			break
+		done < "$fileHoldingInput"
+
+		printf "Averages:\n" # first loop for averages to preserve formatting
+
+		while read line
+		do
+			sum=0
+			avg=0
+			wordCount=$(echo "$line" | wc -w) # pipes the whole line into wc which assigns the wordcount to wordCount so we can know how many items are on each line
+		
+			for val in $line # we want to sum up each line in order to calculate the average
+			do
+				sum=$(($sum + $val))
+			done
+
+			# FOR ROUNDING, ADD DENOMINATOR/2 TO THE NUMERATOR
+			denomDiv=$(expr $wordCount / 2) # denominator/2 part
+			roundingSum=$(expr $sum + $denomDiv) # add denom/2 to the numerator
+
+			avg=$(expr $roundingSum / $wordCount) # avg = sum / # of vals
+			
+			printf "$avg\t"
+		
+		done < "$rowHolder"
+
+		# second loop for printing formatted medians
+		printf "\nMedians:\n"
+
+		while read line
+		do
+			wordCount=$(echo "$line" | wc -w)
+
+			median=$(echo "$line" | cut -f $(((wordCount/2+1))))
+
+			printf "$median\t"
+		
+		done < "$rowHolder"
+	
+		printf "\n"
+
+	rm -f $fileHoldingInput
+	rm -f $rowHolder
+
+# user did not provide a valid request for rows or columns
+	else
+	rm -f $fileHoldingInput
+	echo "Usage: stats {-rows|-cols} [file]" 1>&2
+	exit 1
+
+	fi
+
+else
+	rm -f $fileHoldingInput 
+	echo "ERROR: File not readable." 1>&2
+	exit 1
+fi

@@ -1,0 +1,206 @@
+#!/bin/bash
+numberOfArguments="$#"
+rowsOrColumns=$1
+
+# The only argument received was the row or column command.
+# something is being piped in
+# fileHoldingInput is temporary, named after its process id,
+# and will be deleted at the end
+if [ $numberOfArguments = "1" ]
+then
+	# $$  returns the process id
+	fileHoldingInput="./fileHoldingInput$$"
+	cat > "$fileHoldingInput"
+
+# two arguments given, there is a file and a row/column wish
+# copy the file provided into a temporary file
+elif [ $numberOfArguments = "2" ]
+then
+	# -s $2 means that the file does exist and is not empty
+	if [ -s $2 ]
+	then
+		if [ -r $2 ] # the file is also readable
+		then
+			fileHoldingInput="./fileHoldingInput$$"
+			cp $2 $fileHoldingInput
+		else
+			echo "ERROR: File not readable." 1>&2
+			exit 1
+		fi
+	else
+		echo "ERROR: File is empty or does not exist." 1>&2
+		exit 1
+	fi
+# Error condition: send message going to standard out
+# instead to standard error
+else
+	echo "ERROR: Invalid number of arguments." 1>&2
+	exit 1
+
+fi
+
+# using the trap command to catch interrupt, hangup, terminate signals
+trap "rm -f $fileHoldingInput; echo 'Trapped a signal... Exiting.'; exit 1" INT HUP TERM
+
+if [ -s $fileHoldingInput ] # file exists, is > 0
+then
+
+	# the user wants me to calculate row statistics, they can put
+	# in any word beginning with a - and a lowercase r and it will work	
+	if [[ $rowsOrColumns == -r* ]] # * is a wild card, the remaining letters don't matter
+	then
+		printf "Average\tMedian\n"
+
+		while read line # grabs entire row from fileHoldingInput
+		do
+			sum=0
+			counter=0
+			
+			for value in $line # for loop cycles thru each value within the grabbed row in $line
+			do
+				sum=$(expr $sum + $value)
+				arr[counter]=$value
+				((counter++))
+				
+			done
+
+			medianHelperArr=( $( printf "%s\n" "${arr[@]}" | sort -n) ) # iterate thru arr, sort the numbers, put them into medianHelperArr
+
+			# medianIndex is where in the array the median is
+			medianIndex=$(expr $counter / 2)
+
+			med=${medianHelperArr[$medianIndex]}
+
+			# FOR ROUNDING, ADD DENOMINATOR/2 TO THE NUMERATOR
+			denomDiv=$(expr $counter / 2) # denominator/2 part
+			roundingSum=$(expr $sum + $denomDiv) # add denom/2 to the numerator
+
+			avg=$(expr $roundingSum / $counter) # avg = sum / # of vals
+			
+			printf "$avg\t$med\n"
+			
+		done < "$fileHoldingInput"
+
+	rm -f $fileHoldingInput
+
+# user wants to calculate column statistics, any word beginning
+# with -c
+	elif [[ $rowsOrColumns == -c* ]]
+	then
+		sortedColumns1="./sortedColumns1$$"
+		sortedColumns2="./sortedColumns2$$"
+		tempRow1="./tempRow1$$"
+		tempRow2="./tempRow2$$"
+		
+		counter=1 # at the end counter will hold how many nums per col
+		# AKA counter is the number of rows
+		# cut the file into sorted rows
+		
+		numberOfValsPerColumn=0
+
+		while read line
+		do
+			((numberOfValsPerColumn++))
+		done < $fileHoldingInput
+
+		# do this one without the loop so it opens the file without the append
+		cut -f $counter $fileHoldingInput | sort -g > $sortedColumns1
+	
+		# this loop cuts each column out, sorts them, and places them into one big file
+
+		while read line
+		do
+			cut -f $(($counter + 1)) $fileHoldingInput | sort -g  >> $sortedColumns1
+			counter=$(($counter + 1))
+		done < $fileHoldingInput
+
+		# cut out the empty lines at the end of sortedcolumn1
+		sed '/^$/d' $sortedColumns1 > $sortedColumns2	
+	
+		# to be used to format the stuff properly
+		transposeFormatter=$(($numberOfValsPerColumn * 2))
+
+		# transpose the cut file into rows, pass unformatted version into tempRow1 tempRow2 holds correctly formatted transposition of columns to rows
+		cat $sortedColumns2 | tr '\n' '\t' > $tempRow1
+
+		# make it so there's the correct # of numbers on each line
+		# remember that transposeFormatter holds the number of values per column
+		# * 2 b/c of tabs
+		sed -e "s/.\{$transposeFormatter\}/&\n/g" < $tempRow1 | cat >> "$tempRow2"		
+		# NOTE: tempRow2 holds the transposed rows and columns correctly formatted
+		# Now, all I need to do is treat it just like I would the rows.
+
+		# PRINTING AVERAGES. I split them up into two annoying loops so that the formatting could be followed
+
+		printf "Averages:\n"
+
+		while read line # grabs entire row from fileHoldingInput
+		do
+			sum=0
+			counter=0
+			
+			for value in $line # for loop cycles thru each value within the grabbed row in $line
+			do
+				sum=$(expr $sum + $value)
+				((counter++))
+				
+			done
+
+			# FOR ROUNDING, ADD DENOMINATOR/2 TO THE NUMERATOR
+			denomDiv=$(expr $counter / 2) # denominator/2 part
+			roundingSum=$(expr $sum + $denomDiv) # add denom/2 to the numerator
+
+			avg=$(expr $roundingSum / $counter) # avg = sum / # of vals
+			
+			printf "$avg\t"
+
+		done < "$tempRow2" # All that is needed to do this 
+
+		
+		# second loop for printing formatted medians
+		printf "\nMedians:\n"
+
+		while read line
+		do
+			counter=0
+			
+			for value in $line # for loop cycles thru each value within the grabbed row in $line
+			do
+				arr[counter]=$value
+				((counter++))
+				
+			done
+
+			medianHelperArr=( $( printf "%s\n" "${arr[@]}" | sort -n) ) # iterate thru arr, sort the numbers, put them into medianHelperArr
+
+			# medianIndex is where in the array the median is
+			medianIndex=$(expr $counter / 2)
+
+			med=${medianHelperArr[$medianIndex]}
+
+			printf "$med\t"
+
+		done < "$tempRow2" # All that is needed to do this 
+
+		printf "\n"
+
+
+	rm -f $fileHoldingInput
+	rm -f $sortedColumns1
+	rm -f $sortedColumns2
+	rm -f $tempRow1
+	rm -f $tempRow2
+
+# user did not provide a valid request for rows or columns
+	else
+	rm -f $fileHoldingInput
+	echo "ERROR: You did not validly ask for a row or column statistical calculation." 1>&2
+	exit 1
+
+	fi
+
+else
+	rm -f $fileHoldingInput 
+	echo "ERROR: File not readable." 1>&2
+	exit 1
+fi
